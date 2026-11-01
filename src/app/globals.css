@@ -327,3 +327,54 @@ a:focus-visible,
     transform: none;
   }
 }
+
+.drive-download {
+  position: fixed;
+  z-index: 20;
+  right: 24px;
+  bottom: 24px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 9px;
+  min-height: 46px;
+  padding: 0 18px;
+  border: 1px solid rgba(238, 225, 255, 0.52);
+  border-radius: 12px;
+  color: #251b39;
+  background: linear-gradient(135deg, #d3c1ff, #ad9ae6);
+  box-shadow:
+    0 12px 32px rgba(8, 7, 18, 0.35),
+    0 0 24px rgba(153, 124, 219, 0.24),
+    inset 0 1px 0 rgba(255, 255, 255, 0.55);
+  font-size: 13px;
+  font-weight: 650;
+  transition: transform 180ms ease, box-shadow 180ms ease;
+}
+
+.drive-download:hover {
+  color: #251b39;
+  transform: translateY(-2px);
+  box-shadow:
+    0 16px 38px rgba(8, 7, 18, 0.4),
+    0 0 30px rgba(153, 124, 219, 0.34),
+    inset 0 1px 0 rgba(255, 255, 255, 0.65);
+}
+
+@media (max-width: 600px) {
+  .drive-download {
+    right: 14px;
+    bottom: 14px;
+    left: 14px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .drive-download {
+    transition: none;
+  }
+
+  .drive-download:hover {
+    transform: none;
+  }
+}
