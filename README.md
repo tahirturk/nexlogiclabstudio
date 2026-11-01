@@ -9,6 +9,9 @@ npm run dev
 
 Open [http://localhost:3000](http://localhost:3000).
 
+Production builds use Next.js Webpack mode (`next build --webpack`) for
+compatibility with hosting environments where Turbopack's CSS worker may fail.
+
 ## Connect the AI engine
 
 Voice generation and transcription use the companion Colab notebook at
