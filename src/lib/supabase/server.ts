@@ -3,14 +3,13 @@ import { cookies } from "next/headers";
 import { getSupabaseConfig } from "./config";
 
 export async function createSupabaseServerClient() {
+  const cookieStore = await cookies();
   const config = getSupabaseConfig();
   if (!config) {
     throw new Error(
       "Set NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY to enable accounts.",
     );
   }
-
-  const cookieStore = await cookies();
 
   return createServerClient(config.url, config.key, {
     cookies: {
