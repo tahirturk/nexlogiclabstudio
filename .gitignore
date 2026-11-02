@@ -19,6 +19,7 @@
 
 # production
 /build
+/.runpod-data
 
 # misc
 .DS_Store

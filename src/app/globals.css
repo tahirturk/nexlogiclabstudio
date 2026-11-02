@@ -378,3 +378,27 @@ a:focus-visible,
     transform: none;
   }
 }
+
+select {
+  color-scheme: dark;
+}
+
+select option {
+  color: #ededf1;
+  background-color: #242428;
+}
+
+select option:checked {
+  color: #211734;
+  background-color: #bca7f4;
+}
+
+.reference-file,
+.reference-file strong,
+.reference-file input[type="file"] {
+  cursor: pointer;
+}
+
+.reference-drop > div {
+  cursor: pointer;
+}
