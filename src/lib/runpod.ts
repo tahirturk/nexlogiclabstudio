@@ -31,6 +31,17 @@ export async function readRunpodResponse(response: Response) {
     | null;
 }
 
+export function runpodRateLimitResponse(response: Response) {
+  const headers = new Headers({ "Cache-Control": "no-store" });
+  const retryAfter = response.headers.get("Retry-After");
+  if (retryAfter) headers.set("Retry-After", retryAfter);
+
+  return Response.json(
+    { error: "Runpod is rate limiting requests. Please retry shortly." },
+    { status: 429, headers },
+  );
+}
+
 export function runpodErrorResponse(error: unknown) {
   const message =
     error instanceof Error ? error.message : "The Runpod request failed.";

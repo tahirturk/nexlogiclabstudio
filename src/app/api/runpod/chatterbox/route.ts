@@ -7,13 +7,15 @@ import {
   saveJob,
   saveReference,
   StoredJob,
-  withOwnerCookie,
+  withPrivateOwnerResponse,
 } from "@/lib/runpod-storage";
 import {
   readRunpodResponse,
+  runpodRateLimitResponse,
   runpodEndpointUrl,
   runpodErrorResponse,
 } from "@/lib/runpod";
+import { reserveTtsQuota, settleTtsQuota } from "@/lib/tts-quota";
 
 const MAX_REFERENCE_BYTES = 20 * 1024 * 1024;
 const ALLOWED_AUDIO_TYPES = new Set([
@@ -45,8 +47,16 @@ function publicAppUrl() {
 }
 
 export async function POST(request: Request) {
-  const owner = getRequestOwner(request);
+  const owner = await getRequestOwner();
+  if (!owner) {
+    return Response.json(
+      { error: "Sign in to generate a voiceover." },
+      { status: 401, headers: { "Cache-Control": "private, no-store" } },
+    );
+  }
   let referenceId: string | undefined;
+  let quotaReserved = false;
+  let jobId: string | undefined;
 
   try {
     const form = await request.formData();
@@ -60,7 +70,7 @@ export async function POST(request: Request) {
       !prompt.trim() ||
       prompt.length > 30_000
     ) {
-      return withOwnerCookie(
+      return withPrivateOwnerResponse(
         Response.json(
           { error: "Enter a script between 1 and 30,000 characters." },
           { status: 400 },
@@ -74,7 +84,7 @@ export async function POST(request: Request) {
         voice as (typeof CHATTERBOX_VOICES)[number],
       )
     ) {
-      return withOwnerCookie(
+      return withPrivateOwnerResponse(
         Response.json(
           { error: "Choose a supported Chatterbox preset voice." },
           { status: 400 },
@@ -86,20 +96,20 @@ export async function POST(request: Request) {
       title !== null &&
       (typeof title !== "string" || title.length > 100)
     ) {
-      return withOwnerCookie(
+      return withPrivateOwnerResponse(
         Response.json({ error: "Project name must be 100 characters or fewer." }, { status: 400 }),
         owner,
       );
     }
     if (reference !== null && !(reference instanceof File)) {
-      return withOwnerCookie(
+      return withPrivateOwnerResponse(
         Response.json({ error: "Reference audio must be an uploaded file." }, { status: 400 }),
         owner,
       );
     }
     if (reference instanceof File) {
       if (form.get("consent") !== "true") {
-        return withOwnerCookie(
+        return withPrivateOwnerResponse(
           Response.json(
             { error: "Confirm that you have permission to use this reference voice." },
             { status: 400 },
@@ -108,7 +118,7 @@ export async function POST(request: Request) {
         );
       }
       if (!reference.size || reference.size > MAX_REFERENCE_BYTES) {
-        return withOwnerCookie(
+        return withPrivateOwnerResponse(
           Response.json(
             { error: "Reference audio must be smaller than 20 MB." },
             { status: 400 },
@@ -117,7 +127,7 @@ export async function POST(request: Request) {
         );
       }
       if (!ALLOWED_AUDIO_TYPES.has(reference.type.toLowerCase())) {
-        return withOwnerCookie(
+        return withPrivateOwnerResponse(
           Response.json(
             { error: "Upload a WAV, MP3, M4A, FLAC, or OGG voice sample." },
             { status: 400 },
@@ -128,6 +138,35 @@ export async function POST(request: Request) {
     }
 
     const id = newId();
+    jobId = id;
+    const reservation = await reserveTtsQuota(
+      owner.id,
+      id,
+      prompt.trim().length,
+    );
+    if (!reservation.allowed) {
+      const needsPackage = reservation.code === "PACKAGE_REQUIRED";
+      return withPrivateOwnerResponse(
+        Response.json(
+          {
+            error: needsPackage
+              ? "Your account does not have a package yet. Ask an administrator to assign one."
+              : "This script exceeds your remaining voice generation quota.",
+            code: reservation.code,
+            ...(reservation.code === "QUOTA_EXCEEDED"
+              ? {
+                  limit: reservation.limit,
+                  used: reservation.used,
+                  reserved: reservation.reserved,
+                }
+              : {}),
+          },
+          { status: needsPackage ? 403 : 402 },
+        ),
+        owner,
+      );
+    }
+    quotaReserved = true;
     const createdAt = Date.now();
     let voiceUrl: string | undefined;
     if (reference instanceof File) {
@@ -157,6 +196,15 @@ export async function POST(request: Request) {
     });
     const data = await readRunpodResponse(runpodResponse);
     if (!runpodResponse.ok) {
+      if (runpodResponse.status === 429) {
+        await settleTtsQuota(id, false);
+        quotaReserved = false;
+        if (referenceId) {
+          await removeReference(referenceId);
+          referenceId = undefined;
+        }
+        return withPrivateOwnerResponse(runpodRateLimitResponse(runpodResponse), owner);
+      }
       throw new Error(`Runpod rejected the request (HTTP ${runpodResponse.status}).`);
     }
     if (typeof data?.id !== "string") {
@@ -182,8 +230,9 @@ export async function POST(request: Request) {
       ...(referenceId ? { referenceId } : {}),
     };
     await saveJob(job);
+    quotaReserved = false;
 
-    return withOwnerCookie(
+    return withPrivateOwnerResponse(
       Response.json(
         { id, status: job.status },
         { headers: { "Cache-Control": "no-store" } },
@@ -191,7 +240,14 @@ export async function POST(request: Request) {
       owner,
     );
   } catch (error) {
+    if (quotaReserved && jobId) {
+      try {
+        await settleTtsQuota(jobId, false);
+      } catch (settlementError) {
+        console.error("Could not release a failed Runpod quota reservation.", settlementError);
+      }
+    }
     if (referenceId) await removeReference(referenceId);
-    return withOwnerCookie(runpodErrorResponse(error), owner);
+    return withPrivateOwnerResponse(runpodErrorResponse(error), owner);
   }
 }

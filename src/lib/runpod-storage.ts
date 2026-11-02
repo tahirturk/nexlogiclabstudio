@@ -9,13 +9,14 @@ import {
   writeFile,
 } from "node:fs/promises";
 import path from "node:path";
+import { connection } from "next/server";
+import { createSupabaseServerClient } from "@/lib/supabase/server";
 
-const OWNER_COOKIE = "runpod_history_owner";
 const OUTPUT_RETENTION_MS = 12 * 60 * 60 * 1000;
 const REFERENCE_RETENTION_MS = 12 * 60 * 60 * 1000;
 const JOB_RETENTION_MS = 24 * 60 * 60 * 1000;
 
-export type RequestOwner = { id: string; isNew: boolean };
+export type RequestOwner = { id: string };
 
 export type StoredJob = {
   id: string;
@@ -82,30 +83,20 @@ function isMissingFile(error: unknown) {
   );
 }
 
-export function getRequestOwner(request: Request): RequestOwner {
-  const cookieHeader = request.headers.get("cookie") ?? "";
-  const existing = cookieHeader
-    .split(";")
-    .map((part) => part.trim())
-    .find((part) => part.startsWith(`${OWNER_COOKIE}=`))
-    ?.slice(OWNER_COOKIE.length + 1);
-
-  if (existing && /^[0-9a-f-]{36}$/i.test(existing)) {
-    return { id: existing, isNew: false };
-  }
-
-  return { id: randomUUID(), isNew: true };
+export async function getRequestOwner(): Promise<RequestOwner | null> {
+  await connection();
+  const supabase = await createSupabaseServerClient();
+  const { data, error } = await supabase.auth.getUser();
+  if (error || !data.user) return null;
+  return { id: data.user.id };
 }
 
-export function withOwnerCookie(response: Response, owner: RequestOwner) {
-  if (!owner.isNew) return response;
-
+export function withPrivateOwnerResponse(response: Response, _owner: RequestOwner) {
+  if (!validStoredId(_owner.id)) {
+    throw new Error("Authenticated account ID is invalid.");
+  }
   const headers = new Headers(response.headers);
-  const secure = process.env.NODE_ENV === "production" ? "; Secure" : "";
-  headers.append(
-    "Set-Cookie",
-    `${OWNER_COOKIE}=${owner.id}; Path=/api/runpod; Max-Age=31536000; HttpOnly; SameSite=Lax${secure}`,
-  );
+  headers.set("Cache-Control", "private, no-store");
   return new Response(response.body, {
     status: response.status,
     statusText: response.statusText,

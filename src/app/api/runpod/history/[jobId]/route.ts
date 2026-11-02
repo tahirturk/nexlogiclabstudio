@@ -4,17 +4,23 @@ import {
   removeJob,
   removeReference,
   validStoredId,
-  withOwnerCookie,
+  withPrivateOwnerResponse,
 } from "@/lib/runpod-storage";
 
 type RouteContext = { params: Promise<{ jobId: string }> };
 
-export async function DELETE(request: Request, context: RouteContext) {
-  const owner = getRequestOwner(request);
+export async function DELETE(_request: Request, context: RouteContext) {
+  const owner = await getRequestOwner();
+  if (!owner) {
+    return Response.json(
+      { error: "Sign in to manage your history." },
+      { status: 401, headers: { "Cache-Control": "private, no-store" } },
+    );
+  }
   try {
     const { jobId } = await context.params;
     if (!validStoredId(jobId)) {
-      return withOwnerCookie(
+      return withPrivateOwnerResponse(
         Response.json({ error: "Invalid history item ID." }, { status: 400 }),
         owner,
       );
@@ -22,7 +28,7 @@ export async function DELETE(request: Request, context: RouteContext) {
 
     const job = await readJob(owner.id, jobId);
     if (!job) {
-      return withOwnerCookie(
+      return withPrivateOwnerResponse(
         Response.json({ error: "History item not found." }, { status: 404 }),
         owner,
       );
@@ -33,7 +39,7 @@ export async function DELETE(request: Request, context: RouteContext) {
       job.status !== "FAILED" &&
       job.status !== "CANCELLED"
     ) {
-      return withOwnerCookie(
+      return withPrivateOwnerResponse(
         Response.json(
           { error: "Stop the active job before deleting its history entry." },
           { status: 409 },
@@ -44,9 +50,9 @@ export async function DELETE(request: Request, context: RouteContext) {
 
     await removeJob(owner.id, jobId);
     if (job.referenceId) await removeReference(job.referenceId);
-    return withOwnerCookie(Response.json({ deleted: true }), owner);
+    return withPrivateOwnerResponse(Response.json({ deleted: true }), owner);
   } catch {
-    return withOwnerCookie(
+    return withPrivateOwnerResponse(
       Response.json(
         { error: "Could not delete the generated file from app storage." },
         { status: 500 },

@@ -6,15 +6,17 @@ import {
   removeReference,
   saveJob,
   validStoredId,
-  withOwnerCookie,
+  withPrivateOwnerResponse,
   writeJobAudio,
   readLimitedBody,
 } from "@/lib/runpod-storage";
 import {
   readRunpodResponse,
+  runpodRateLimitResponse,
   runpodEndpointUrl,
   runpodErrorResponse,
 } from "@/lib/runpod";
+import { settleTtsQuota } from "@/lib/tts-quota";
 
 type RouteContext = { params: Promise<{ jobId: string }> };
 const MAX_OUTPUT_BYTES = 100 * 1024 * 1024;
@@ -29,12 +31,18 @@ function isAudioUrl(value: unknown): value is string {
   }
 }
 
-export async function GET(request: Request, context: RouteContext) {
-  const owner = getRequestOwner(request);
+export async function GET(_request: Request, context: RouteContext) {
+  const owner = await getRequestOwner();
+  if (!owner) {
+    return Response.json(
+      { error: "Sign in to access this voiceover." },
+      { status: 401, headers: { "Cache-Control": "private, no-store" } },
+    );
+  }
   try {
     const { jobId } = await context.params;
     if (!validStoredId(jobId)) {
-      return withOwnerCookie(
+      return withPrivateOwnerResponse(
         Response.json({ error: "Invalid job ID." }, { status: 400 }),
         owner,
       );
@@ -42,15 +50,16 @@ export async function GET(request: Request, context: RouteContext) {
 
     const job = await readJob(owner.id, jobId);
     if (!job) {
-      return withOwnerCookie(
+      return withPrivateOwnerResponse(
         Response.json({ error: "Job not found." }, { status: 404 }),
         owner,
       );
     }
     if (job.expiresAt <= Date.now()) {
+      await settleTtsQuota(job.id, job.status === "COMPLETED");
       await removeJob(owner.id, job.id);
       if (job.referenceId) await removeReference(job.referenceId);
-      return withOwnerCookie(
+      return withPrivateOwnerResponse(
         Response.json({ error: "This result has expired." }, { status: 410 }),
         owner,
       );
@@ -63,7 +72,10 @@ export async function GET(request: Request, context: RouteContext) {
       const response = await fetch(url, { headers, cache: "no-store" });
       const data = await readRunpodResponse(response);
       if (!response.ok) {
-        return withOwnerCookie(
+        if (response.status === 429) {
+          return withPrivateOwnerResponse(runpodRateLimitResponse(response), owner);
+        }
+        return withPrivateOwnerResponse(
           Response.json(
             { error: `Could not check the Runpod job (HTTP ${response.status}).` },
             { status: 502 },
@@ -72,7 +84,7 @@ export async function GET(request: Request, context: RouteContext) {
         );
       }
       if (typeof data?.status !== "string") {
-        return withOwnerCookie(
+        return withPrivateOwnerResponse(
           Response.json(
             { error: "Runpod returned an invalid job status." },
             { status: 502 },
@@ -129,7 +141,12 @@ export async function GET(request: Request, context: RouteContext) {
       }
     }
 
-    return withOwnerCookie(
+    if (job.status === "COMPLETED") await settleTtsQuota(job.id, true);
+    else if (job.status === "FAILED" || job.status === "CANCELLED") {
+      await settleTtsQuota(job.id, false);
+    }
+
+    return withPrivateOwnerResponse(
       Response.json(
         { status: job.status, error: job.error },
         { headers: { "Cache-Control": "no-store" } },
@@ -137,23 +154,29 @@ export async function GET(request: Request, context: RouteContext) {
       owner,
     );
   } catch (error) {
-    return withOwnerCookie(runpodErrorResponse(error), owner);
+    return withPrivateOwnerResponse(runpodErrorResponse(error), owner);
   }
 }
 
-export async function DELETE(request: Request, context: RouteContext) {
-  const owner = getRequestOwner(request);
+export async function DELETE(_request: Request, context: RouteContext) {
+  const owner = await getRequestOwner();
+  if (!owner) {
+    return Response.json(
+      { error: "Sign in to manage this voiceover." },
+      { status: 401, headers: { "Cache-Control": "private, no-store" } },
+    );
+  }
   try {
     const { jobId } = await context.params;
     if (!validStoredId(jobId)) {
-      return withOwnerCookie(
+      return withPrivateOwnerResponse(
         Response.json({ error: "Invalid job ID." }, { status: 400 }),
         owner,
       );
     }
     const job = await readJob(owner.id, jobId);
     if (!job) {
-      return withOwnerCookie(
+      return withPrivateOwnerResponse(
         Response.json({ error: "Job not found." }, { status: 404 }),
         owner,
       );
@@ -169,7 +192,7 @@ export async function DELETE(request: Request, context: RouteContext) {
         cache: "no-store",
       });
       if (!response.ok) {
-        return withOwnerCookie(
+        return withPrivateOwnerResponse(
           Response.json(
             { error: `Runpod could not cancel the job (HTTP ${response.status}).` },
             { status: 502 },
@@ -179,10 +202,11 @@ export async function DELETE(request: Request, context: RouteContext) {
       }
     }
 
+    if (job.status !== "COMPLETED") await settleTtsQuota(job.id, false);
     await removeJob(owner.id, jobId);
     if (job.referenceId) await removeReference(job.referenceId);
-    return withOwnerCookie(Response.json({ cancelled: true }), owner);
+    return withPrivateOwnerResponse(Response.json({ cancelled: true }), owner);
   } catch (error) {
-    return withOwnerCookie(runpodErrorResponse(error), owner);
+    return withPrivateOwnerResponse(runpodErrorResponse(error), owner);
   }
 }

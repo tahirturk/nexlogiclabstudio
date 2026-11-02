@@ -1,3 +1,4 @@
+import { connection } from "next/server";
 import { readReference, validStoredId } from "@/lib/runpod-storage";
 
 type RouteContext = {
@@ -5,6 +6,7 @@ type RouteContext = {
 };
 
 export async function GET(request: Request, context: RouteContext) {
+  await connection();
   const { referenceId } = await context.params;
   const token = new URL(request.url).searchParams.get("token") ?? "";
   if (!validStoredId(referenceId)) {
